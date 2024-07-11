@@ -1,0 +1,115 @@
+Download, Process, and Load Data into SQLite:
+
+import requests
+import pandas as pd
+from tenacity import retry, stop_after_attempt, wait_fixed
+from sqlalchemy import create_engine
+from datetime import datetime
+
+parquet_url = 'https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page'
+local_parquet_path = 'file.parquet'
+sqlite_db_url = 'sqlite:///trips.db'
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def download_parquet_file(url, local_path):
+ response = requests.get(url, stream=True)
+ response.raise_for_status()
+ with open(local_path, 'wb') as file:
+ for chunk in response.iter_content(chunk_size=8192):
+ file.write(chunk)
+ print(f'Downloaded {url} to {local_path}')
+
+def process_data(parquet_path):
+ df = pd.read_parquet(parquet_path)
+ df = df[df['year'] == 2019]
+ df = df.dropna()
+ df['start_time'] = pd.to_datetime(df['start_time'])
+ df['end_time'] = pd.to_datetime(df['end_time'])
+ df['trip_duration'] = (df['end_time'] - df['start_time']).dt.total_seconds() / 60 # duration in minutes
+ df['average_speed'] = df['distance'] / (df['trip_duration'] / 60) # speed in distance unit per hour
+ return df
+
+def load_data_to_sqlite(df, db_url):
+ engine = create_engine(db_url)
+ df.to_sql('trips', con=engine, if_exists='replace', index=False)
+ print(f'Data loaded into database {db_url}')
+
+try:
+ download_parquet_file(parquet_url, local_parquet_path)
+ df = process_data(local_parquet_path)
+ load_data_to_sqlite(df, sqlite_db_url)
+except Exception as e:
+ print(f'Failed to process the Parquet file: {e}')
+
+
+What are the peak hours for taxi usage?
+
+SELECT strftime('%H', start_time) AS hour, COUNT(*) AS trip_count
+FROM trips
+GROUP BY hour
+ORDER BY trip_count DESC;
+
+
+How does passenger count affect the trip fare?
+
+SELECT passenger_count, AVG(fare) AS average_fare
+FROM trips
+GROUP BY passenger_count
+ORDER BY passenger_count;
+
+
+What are the trends in usage over the year?
+
+SELECT strftime('%Y-%m', start_time) AS month, COUNT(*) AS trip_count
+FROM trips
+GROUP BY month
+ORDER BY month;
+
+
+Script to visualize the results:
+
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+
+conn = sqlite3.connect('trips.db')
+peak_hours_df = pd.read_sql_query('''
+ SELECT strftime('%H', start_time) AS hour, COUNT(*) AS trip_count
+ FROM trips
+ GROUP BY hour
+ ORDER BY trip_count DESC;
+''', conn)
+plt.figure(figsize=(10, 6))
+plt.bar(peak_hours_df['hour'], peak_hours_df['trip_count'])
+plt.xlabel('Hour of the Day')
+plt.ylabel('Number of Trips')
+plt.title('Peak Hours for Taxi Usage')
+plt.xticks(rotation=45)
+plt.show()
+passenger_fare_df = pd.read_sql_query('''
+ SELECT passenger_count, AVG(fare) AS average_fare
+ FROM trips
+ GROUP BY passenger_count
+ ORDER BY passenger_count;
+''', conn)
+plt.figure(figsize=(10, 6))
+plt.bar(passenger_fare_df['passenger_count'], passenger_fare_df['average_fare'])
+plt.xlabel('Passenger Count')
+plt.ylabel('Average Fare')
+plt.title('Effect of Passenger Count on Trip Fare')
+plt.xticks(rotation=45)
+plt.show()
+monthly_usage_df = pd.read_sql_query('''
+ SELECT strftime('%Y-%m', start_time) AS month, COUNT(*) AS trip_count
+ FROM trips
+ GROUP BY month
+ ORDER BY month;
+''', conn)
+plt.figure(figsize=(10, 6))
+plt.plot(monthly_usage_df['month'], monthly_usage_df['trip_count'])
+plt.xlabel('Month')
+plt.ylabel('Number of Trips')
+plt.title('Monthly Usage Trends')
+plt.xticks(rotation=45)
+plt.show()
+conn.close()

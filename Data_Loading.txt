@@ -1,0 +1,53 @@
+CREATE TABLE trips (
+ trip_id INTEGER PRIMARY KEY,
+ start_time TIMESTAMP,
+ end_time TIMESTAMP,
+ start_location TEXT,
+ end_location TEXT,
+ distance_km FLOAT,
+ fare FLOAT,
+ trip_duration FLOAT,
+ average_speed FLOAT
+);
+
+
+
+import requests
+import pandas as pd
+from tenacity import retry, stop_after_attempt, wait_fixed
+from sqlalchemy import create_engine
+
+parquet_url = 'https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page'
+local_parquet_path = 'file.parquet'
+database_uri = 'sqlite:///trips.db'
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def download_parquet_file(url, local_path):
+ response = requests.get(url, stream=True)
+ response.raise_for_status()
+ with open(local_path, 'wb') as file:
+ for chunk in response.iter_content(chunk_size=8192):
+ file.write(chunk)
+ print(f'Downloaded {url} to {local_path}')
+
+def process_and_load_data(parquet_path, database_uri):
+ df = pd.read_parquet(parquet_path)
+ df['start_time'] = pd.to_datetime(df['start_time'])
+ df['end_time'] = pd.to_datetime(df['end_time'])
+ df = df[df['start_time'].dt.year == 2019]
+ df = df.dropna(subset=['start_time', 'end_time', 'distance_km', 'fare'])
+ df['trip_duration'] = (df['end_time'] - df['start_time']).dt.total_seconds() / 60
+ df['average_speed'] = df['distance_km'] / (df['trip_duration'] / 60)
+ engine = create_engine(database_uri)
+ df.to_sql('trips', engine, if_exists='replace', index=False)
+ print(f'Successfully loaded data into the database {database_uri}')
+
+def main():
+ try:
+ download_parquet_file(parquet_url, local_parquet_path)
+ process_and_load_data(local_parquet_path, database_uri)
+ except Exception as e:
+ print(f'Failed to process the Parquet file: {e}')
+
+if __name__ == "__main__":
+ main()

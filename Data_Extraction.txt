@@ -1,0 +1,29 @@
+import requests
+import pandas as pd
+from tenacity import retry, stop_after_attempt, wait_fixed
+
+parquet_url = 'https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page'
+local_parquet_path = 'file.parquet'
+output_csv_path = 'filtered_2019.csv'
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def download_parquet_file(url, local_path):
+ response = requests.get(url, stream=True)
+ response.raise_for_status()
+ with open(local_path, 'wb') as file:
+ for chunk in response.iter_content(chunk_size=8192):
+ file.write(chunk)
+ print(f'Downloaded {url} to {local_path}')
+
+def filter_and_save_csv(parquet_path, output_path):
+ df = pd.read_parquet(parquet_path)
+ df_filtered = df[df['year'] == 2019]
+ df_filtered.to_csv(output_path, index=False)
+ print(f'Saved filtered data to {output_path}')
+
+
+try:
+ download_parquet_file(parquet_url, local_parquet_path)
+ filter_and_save_csv(local_parquet_path, output_csv_path)
+except Exception as e:
+ print(f'Failed to process the Parquet file: {e}')
